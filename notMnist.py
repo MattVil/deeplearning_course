@@ -1,6 +1,7 @@
 from __future__ import print_function
 import matplotlib.pyplot as plt
 import numpy as np
+import cv2
 import os
 import sys
 import tarfile
@@ -13,6 +14,7 @@ from six.moves import cPickle as pickle
 url = 'https://commondatastorage.googleapis.com/books1000/'
 last_percent_reported = None
 data_root = '.' # Change me to store data elsewhere
+
 
 def download_progress_hook(count, blockSize, totalSize):
   """A hook to report the progress of a download. This is mostly intended for users with
@@ -46,13 +48,8 @@ def maybe_download(filename, expected_bytes, force=False):
       'Failed to verify ' + dest_filename + '. Can you get to it with a browser?')
   return dest_filename
 
-train_filename = maybe_download('notMNIST_large.tar.gz', 247336696)
-test_filename = maybe_download('notMNIST_small.tar.gz', 8458043)
-
-num_classes = 10
-np.random.seed(133)
-
 def maybe_extract(filename, force=False):
+  """Extract the images from the downloaded files and save them in diffrent directory"""
   root = os.path.splitext(os.path.splitext(filename)[0])[0]  # remove .tar.gz
   if os.path.isdir(root) and not force:
     # You may override by setting force=True.
@@ -73,5 +70,104 @@ def maybe_extract(filename, force=False):
   print(data_folders)
   return data_folders
 
+image_size = 28  # Pixel width and height.
+pixel_depth = 255.0  # Number of levels per pixel.
+
+def load_letter(folder, min_num_images):
+  """Load the data for a single letter label."""
+  image_files = os.listdir(folder)
+  dataset = np.ndarray(shape=(len(image_files), image_size, image_size),
+                         dtype=np.float32)
+  print(folder)
+  num_images = 0
+  for image in image_files:
+    image_file = os.path.join(folder, image)
+    try:
+      image_data = (ndimage.imread(image_file).astype(float) -
+                    pixel_depth / 2) / pixel_depth
+      if image_data.shape != (image_size, image_size):
+        raise Exception('Unexpected image shape: %s' % str(image_data.shape))
+      dataset[num_images, :, :] = image_data
+      num_images = num_images + 1
+    except (IOError, ValueError) as e:
+      print('Could not read:', image_file, ':', e, '- it\'s ok, skipping.')
+
+  dataset = dataset[0:num_images, :, :]
+  if num_images < min_num_images:
+    raise Exception('Many fewer images than expected: %d < %d' %
+                    (num_images, min_num_images))
+
+  print('Full dataset tensor:', dataset.shape)
+  print('Mean:', np.mean(dataset))
+  print('Standard deviation:', np.std(dataset))
+  return dataset
+
+def maybe_pickle(data_folders, min_num_images_per_class, force=False):
+  dataset_names = []
+  for folder in data_folders:
+    set_filename = folder + '.pickle'
+    dataset_names.append(set_filename)
+    if os.path.exists(set_filename) and not force:
+      # You may override by setting force=True.
+      print('%s already present - Skipping pickling.' % set_filename)
+    else:
+      print('Pickling %s.' % set_filename)
+      dataset = load_letter(folder, min_num_images_per_class)
+      try:
+        with open(set_filename, 'wb') as f:
+          pickle.dump(dataset, f, pickle.HIGHEST_PROTOCOL)
+      except Exception as e:
+        print('Unable to save data to', set_filename, ':', e)
+
+  return dataset_names
+
+#Download
+print("\n-------------------------------------------------------------------")
+print("Downloading files ...")
+train_filename = maybe_download('notMNIST_large.tar.gz', 247336696)
+test_filename = maybe_download('notMNIST_small.tar.gz', 8458043)
+print("Done !")
+
+
+#Extract
+print("\n-------------------------------------------------------------------")
+print("Extracting files ...")
+num_classes = 10
+np.random.seed(133)
 train_folders = maybe_extract(train_filename)
 test_folders = maybe_extract(test_filename)
+print("Done !")
+
+#Print a exemple of image
+img = cv2.imread('notMNIST_small/B/Q2FsaWd1bGEgUmVndWxhci50dGY=.png', 0)
+cv2.imshow('Source',img)
+
+#Convert all dataset into 3D array + zero mean normalization + standard deviation
+print("\n-------------------------------------------------------------------")
+print("Convert to pickle ...")
+train_datasets = maybe_pickle(train_folders, 45000)
+test_datasets = maybe_pickle(test_folders, 1800)
+print("Done !")
+
+#Print images from pickle files
+print("\n-------------------------------------------------------------------")
+print("Show a sample ...")
+pickle_file = train_datasets[0]  # index 0 should be all As, 1 = all Bs, etc.
+with open(pickle_file, 'rb') as f:
+    letter_set = pickle.load(f)  # unpickle
+    sample_idx = np.random.randint(len(letter_set))  # pick a random image index
+    sample_image = letter_set[sample_idx, :, :]  # extract a 2D slice
+    cv2.imshow('Normalized',sample_image)
+print("Done !")
+
+#Check the balance
+print("\n-------------------------------------------------------------------")
+print("Check the size of each classes ...")
+for i in range(10):
+    with open(train_datasets[i], 'rb') as fp:
+        letter_set = pickle.load(fp)
+        print(letter_set.shape)
+print("Done !")
+
+#wait 2sec
+k = cv2.waitKey(2000)
