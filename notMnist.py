@@ -10,6 +10,8 @@ from scipy import ndimage
 from sklearn.linear_model import LogisticRegression
 from six.moves.urllib.request import urlretrieve
 from six.moves import cPickle as pickle
+import time
+import hashlib
 
 url = 'https://commondatastorage.googleapis.com/books1000/'
 last_percent_reported = None
@@ -103,6 +105,8 @@ def load_letter(folder, min_num_images):
   return dataset
 
 def maybe_pickle(data_folders, min_num_images_per_class, force=False):
+  """Transform the images folder into .pickle files by transfoming .jpg
+  into 3D array aka tensor"""
   dataset_names = []
   for folder in data_folders:
     set_filename = folder + '.pickle'
@@ -120,6 +124,136 @@ def maybe_pickle(data_folders, min_num_images_per_class, force=False):
         print('Unable to save data to', set_filename, ':', e)
 
   return dataset_names
+
+def make_arrays(nb_rows, img_size):
+  """Create the array before merge all"""
+  if nb_rows:
+    dataset = np.ndarray((nb_rows, img_size, img_size), dtype=np.float32)
+    labels = np.ndarray(nb_rows, dtype=np.int32)
+  else:
+    dataset, labels = None, None
+  return dataset, labels
+
+def merge_datasets(pickle_files, train_size, valid_size=0):
+  """Merge all the .pickle file in 1 big dataset + 1 for labels"""
+  num_classes = len(pickle_files)
+  valid_dataset, valid_labels = make_arrays(valid_size, image_size)
+  train_dataset, train_labels = make_arrays(train_size, image_size)
+  vsize_per_class = valid_size // num_classes
+  tsize_per_class = train_size // num_classes
+
+  start_v, start_t = 0, 0
+  end_v, end_t = vsize_per_class, tsize_per_class
+  end_l = vsize_per_class+tsize_per_class
+  for label, pickle_file in enumerate(pickle_files):
+    try:
+      with open(pickle_file, 'rb') as f:
+        letter_set = pickle.load(f)
+        # let's shuffle the letters to have random validation and training set
+        np.random.shuffle(letter_set)
+        if valid_dataset is not None:
+          valid_letter = letter_set[:vsize_per_class, :, :]
+          valid_dataset[start_v:end_v, :, :] = valid_letter
+          valid_labels[start_v:end_v] = label
+          start_v += vsize_per_class
+          end_v += vsize_per_class
+
+        train_letter = letter_set[vsize_per_class:end_l, :, :]
+        train_dataset[start_t:end_t, :, :] = train_letter
+        train_labels[start_t:end_t] = label
+        start_t += tsize_per_class
+        end_t += tsize_per_class
+    except Exception as e:
+      print('Unable to process data from', pickle_file, ':', e)
+      raise
+
+  return valid_dataset, valid_labels, train_dataset, train_labels
+
+def randomize(dataset, labels):
+  """Randomize the dataset & labels for better learning"""
+  permutation = np.random.permutation(labels.shape[0])
+  shuffled_dataset = dataset[permutation,:,:]
+  shuffled_labels = labels[permutation]
+  return shuffled_dataset, shuffled_labels
+
+def save_dataset(train_dataset, train_labels, valid_dataset, valid_labels, test_dataset, test_labels):
+  pickle_file = os.path.join(data_root, 'notMNIST.pickle')
+
+  try:
+    f = open(pickle_file, 'wb')
+    save = {
+      'train_dataset': train_dataset,
+      'train_labels': train_labels,
+      'valid_dataset': valid_dataset,
+      'valid_labels': valid_labels,
+      'test_dataset': test_dataset,
+      'test_labels': test_labels,
+      }
+    pickle.dump(save, f, pickle.HIGHEST_PROTOCOL)
+    f.close()
+  except Exception as e:
+    print('Unable to save data to', pickle_file, ':', e)
+    raise
+  return pickle_file
+
+def overlap_rate(train_dataset, train_labels, valid_dataset, valid_labels, test_dataset, test_labels):
+  t1 = time.time()
+  train_hashes = [hashlib.sha1(x).digest() for x in train_dataset]
+  valid_hashes = [hashlib.sha1(x).digest() for x in valid_dataset]
+  test_hashes  = [hashlib.sha1(x).digest() for x in test_dataset]
+
+  valid_in_train = np.in1d(valid_hashes, train_hashes)
+  test_in_train  = np.in1d(test_hashes,  train_hashes)
+  test_in_valid  = np.in1d(test_hashes,  valid_hashes)
+
+  valid_keep = ~valid_in_train
+  test_keep  = ~(test_in_train | test_in_valid)
+
+  valid_dataset_clean = valid_dataset[valid_keep]
+  valid_labels_clean  = valid_labels [valid_keep]
+
+  test_dataset_clean = test_dataset[test_keep]
+  test_labels_clean  = test_labels [test_keep]
+
+  t2 = time.time()
+
+  print("Time: %0.2fs" % (t2 - t1))
+  print("valid/train overlap: %d samples" % valid_in_train.sum())
+  print("test/train overlap: %d samples" % test_in_train.sum())
+  print("test/valid overlap: %d samples" % test_in_valid.sum())
+
+def train_logistic_regression(train_dataset, train_labels, test_dataset, test_labels, train_size, valid_size , test_size):
+  """Train with logistic regression + display and save filter + return accurency"""
+  (samples, width, height) = train_dataset.shape
+  X_tr = np.reshape(train_dataset,(samples, width*height))[0:num_samples]
+  Y_tr = train_labels[0:num_samples]
+
+  lr = LogisticRegression(multi_class='multinomial', solver='lbfgs',
+                               random_state=42, verbose=0, max_iter=1000,
+                               penalty='l2', C=penalty)
+  lr.fit(X_tr, Y_tr)
+
+  (samples, width, height) = test_dataset.shape
+  X_tst = test_dataset.reshape(samples, width * height)
+  y_tst = test_labels
+  # h_tst = lr.predict(X_tst)
+  print('# Samples:%s, Penalty:%s, Accuracy:%f%%' %
+            (num_samples, penalty, lr.score(X_tst, y_tst)*100))
+
+  fig = plt.figure()
+  fig.set_size_inches(10, 2)
+  fig.suptitle('Coefficients at Penalty:%s, Samples:%s' %
+               (penalty, num_samples), fontsize=14)
+  filters = np.ndarray(shape=(num_classes, width, height), dtype=np.float32)
+  for class_i in range(0,(num_classes-1)):
+      filters[class_i, :, :] = lr.coef_.reshape(num_classes, width, height)[class_i]
+      a = fig.add_subplot(1, 10, (class_i+1))
+      a.set_title('class:%s' % (class_i+1))
+      plt.imshow(filters[class_i])
+      plt.axis('off')
+  fig.savefig('./filter/logiticRegression.png')
+  plt.show()
+  return lr.score(X_tst, y_tst)*100
 
 #Download
 print("\n-------------------------------------------------------------------")
@@ -140,7 +274,7 @@ print("Done !")
 
 #Print a exemple of image
 img = cv2.imread('notMNIST_small/B/Q2FsaWd1bGEgUmVndWxhci50dGY=.png', 0)
-cv2.imshow('Source',img)
+#cv2.imshow('Source',img)
 
 #Convert all dataset into 3D array + zero mean normalization + standard deviation
 print("\n-------------------------------------------------------------------")
@@ -157,7 +291,7 @@ with open(pickle_file, 'rb') as f:
     letter_set = pickle.load(f)  # unpickle
     sample_idx = np.random.randint(len(letter_set))  # pick a random image index
     sample_image = letter_set[sample_idx, :, :]  # extract a 2D slice
-    cv2.imshow('Normalized',sample_image)
+    #cv2.imshow('Normalized',sample_image)
 print("Done !")
 
 #Check the balance
@@ -169,5 +303,51 @@ for i in range(10):
         print(letter_set.shape)
 print("Done !")
 
-#wait 2sec
-k = cv2.waitKey(2000)
+#Merge all in 1 dataset
+print("\n-------------------------------------------------------------------")
+print("Merge all .pickle files ...")
+train_size = 200000
+valid_size = 10000
+test_size = 10000
+
+valid_dataset, valid_labels, train_dataset, train_labels = merge_datasets(train_datasets, train_size, valid_size)
+_, _, test_dataset, test_labels = merge_datasets(test_datasets, test_size)
+
+print('Training:', train_dataset.shape, train_labels.shape)
+print('Validation:', valid_dataset.shape, valid_labels.shape)
+print('Testing:', test_dataset.shape, test_labels.shape)
+
+print("Randomize ...")
+train_dataset, train_labels = randomize(train_dataset, train_labels)
+test_dataset, test_labels = randomize(test_dataset, test_labels)
+valid_dataset, valid_labels = randomize(valid_dataset, valid_labels)
+print("Done !")
+
+#Save the merged .pickle file
+print("\n-------------------------------------------------------------------")
+print("Save ...")
+#pickle_file = save_dataset(train_dataset, train_labels, valid_dataset, valid_labels, test_dataset, test_labels)
+print("Compress ...")
+#statinfo = os.stat(pickle_file)
+#print('Compressed pickle size:', statinfo.st_size)
+print("Done !")
+
+#Overlap rate of the shuffled_dataset
+print("\n-------------------------------------------------------------------")
+print("Compute overlape ...")
+overlap_rate(train_dataset, train_labels, valid_dataset, valid_labels, test_dataset, test_labels)
+print("Done !")
+
+#Training with logistic LogisticRegression
+print("\n-------------------------------------------------------------------")
+print("Train with Logistic Regression ...")
+num_samples = 5000
+n_classes = 10
+penalty = 0.01
+
+accurency = train_logistic_regression(train_dataset, train_labels, test_dataset, test_labels, train_size, valid_size , test_size)
+print("Done !")
+
+
+#wait 1sec
+k = cv2.waitKey(1000)
