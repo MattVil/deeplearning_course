@@ -308,7 +308,7 @@ print("\n-------------------------------------------------------------------")
 print("Merge all .pickle files ...")
 train_size = 200000
 valid_size = 10000
-test_size = 10000
+test_size = 18724
 
 valid_dataset, valid_labels, train_dataset, train_labels = merge_datasets(train_datasets, train_size, valid_size)
 _, _, test_dataset, test_labels = merge_datasets(test_datasets, test_size)
@@ -326,10 +326,10 @@ print("Done !")
 #Save the merged .pickle file
 print("\n-------------------------------------------------------------------")
 print("Save ...")
-#pickle_file = save_dataset(train_dataset, train_labels, valid_dataset, valid_labels, test_dataset, test_labels)
+pickle_file = save_dataset(train_dataset, train_labels, valid_dataset, valid_labels, test_dataset, test_labels)
 print("Compress ...")
-#statinfo = os.stat(pickle_file)
-#print('Compressed pickle size:', statinfo.st_size)
+statinfo = os.stat(pickle_file)
+print('Compressed pickle size:', statinfo.st_size)
 print("Done !")
 
 #Overlap rate of the shuffled_dataset
