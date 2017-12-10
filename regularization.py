@@ -49,14 +49,14 @@ print("\n-------------------------------------------------------------------")
 print("Build network : 1 hidden layer + ReLU + L2 regularization")
 
 #hidden_layer_spec = np.array([1024])
-hidden_layer_spec = np.array([1024, 300])
-#hidden_layer_spec = np.array([1024, 300, 50])
+#hidden_layer_spec = np.array([1024, 300])
+hidden_layer_spec = np.array([1024, 300, 50])
 num_hidden_layers = hidden_layer_spec.shape[0]
 batch_size = 256
 beta = 0.0005
 initial_learning_rate = 0.05
 
-epochs = 300
+epochs = 500
 
 stepsPerEpoch = float(train_dataset.shape[0]) / batch_size
 num_steps = int(math.ceil(float(epochs) * stepsPerEpoch))
